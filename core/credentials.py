@@ -132,10 +132,12 @@ def list_saved_devices() -> list[str]:
     """Return device names that have saved credentials."""
     from core.database import get_connection
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT key FROM settings WHERE key LIKE 'cred:%:user'"
-    ).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(
+            "SELECT key FROM settings WHERE key LIKE 'cred:%:user'"
+        ).fetchall()
+    finally:
+        conn.close()
     result = []
     for (key,) in rows:
         parts = key.split(":", 2)
