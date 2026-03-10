@@ -1,0 +1,28 @@
+# Python virtual environment — do NOT commit (machine-specific paths)
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
+
+# Runtime database (user data — not source code)
+apc_devices.db
+
+# Log files
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
