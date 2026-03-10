@@ -158,6 +158,17 @@ def update_last_connected(device_id: int) -> None:
     conn.close()
 
 
+def update_card_type(device_id: int, card_type: str) -> None:
+    """Persist an auto-detected card type for a device."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE devices SET card_type = ? WHERE id = ?",
+        (card_type, device_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 # ──────────────────────────── Audit Log ────────────────────────────── #
 
 def log_audit(device_name: str, ip: str, username: str,

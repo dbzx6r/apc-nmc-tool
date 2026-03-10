@@ -61,6 +61,7 @@ class APCSSHClient:
 
         self.ip: str = ""
         self.username: str = ""
+        self.card_generation: Optional[int] = None   # 1 = NMC gen1, 2 = NMC2/NMC3 (refined by about)
 
     # ── Public API ──────────────────────────────────────────────────── #
 
@@ -135,6 +136,35 @@ class APCSSHClient:
             except Exception:
                 pass
 
+    def send_and_capture(self, command: str, timeout: float = 5.0) -> str:
+        """
+        Send a command and capture its output until the 'apc>' prompt appears
+        or timeout expires. Output is still forwarded to on_output so the
+        terminal panel stays live. Returns the captured text.
+        """
+        if not self.is_connected:
+            return ""
+
+        done = threading.Event()
+        buf: list[str] = []
+        original_callback = self.on_output
+
+        def _capture(text: str) -> None:
+            buf.append(text)
+            if original_callback:
+                original_callback(text)
+            if "apc>" in text:
+                done.set()
+
+        self.on_output = _capture
+        try:
+            self.send(command)
+            done.wait(timeout=timeout)
+        finally:
+            self.on_output = original_callback
+
+        return "".join(buf)
+
     def disconnect(self) -> None:
         """Close the SSH session cleanly."""
         self._connected = False
@@ -186,6 +216,7 @@ class APCSSHClient:
         self._client = client
         self._channel = channel
         self._connected = True
+        self.card_generation = 2  # NMC2 or NMC3 — refined later by about command
 
     def _connect_via_transport(self, ip, port, username, password, policy) -> None:
         """
@@ -224,6 +255,7 @@ class APCSSHClient:
             self._transport = transport
             self._channel = channel
             self._connected = True
+            self.card_generation = 1  # Legacy transport = NMC gen 1
 
         except Exception:
             try:

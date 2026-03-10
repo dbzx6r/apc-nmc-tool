@@ -560,8 +560,68 @@ class APCToolApp(ctk.CTk):
 
         db.log_audit(device["name"], ip, username, "SSH Connect", result="success")
 
+        # Auto-detect card type from 'about' command output
+        self._detect_card_type(client, device, username)
+
         self.after(0, lambda: self._set_connected_state(True))
         self.after(0, lambda ms=ping_ms: self._update_info_bar(ms))
+
+    def _detect_card_type(self, client: APCSSHClient, device: Dict, username: str) -> None:
+        """
+        Called from _connect_thread after successful login.
+        Sends 'about', parses Hardware Rev to determine NMC generation,
+        updates the DB and _current_device in-place, refreshes the info bar.
+        """
+        import re as _re
+
+        # Wait briefly for the login banner to clear before sending a command
+        import time as _time
+        _time.sleep(2.5)
+
+        output = client.send_and_capture("about", timeout=6.0)
+
+        # Map Hardware Rev number to card type string
+        # HW02 = NMC gen 1, HW09 = NMC2, HW21 = NMC3 (others mapped by generation)
+        _HW_MAP = {
+            "02": "NMC (gen 1)",
+            "09": "NMC2",
+            "21": "NMC3",
+        }
+
+        detected: Optional[str] = None
+
+        m = _re.search(r"[Hh]ardware\s+[Rr]ev\s*[:\s]+HW(\d+)", output)
+        if m:
+            hw_num = m.group(1).lstrip("0") or "0"
+            # Try exact two-digit match first, then fall back to generation hint
+            hw_padded = m.group(1).zfill(2)
+            if hw_padded in _HW_MAP:
+                detected = _HW_MAP[hw_padded]
+            elif client.card_generation == 1:
+                detected = "NMC (gen 1)"
+            else:
+                detected = "NMC2"
+        elif client.card_generation == 1:
+            detected = "NMC (gen 1)"
+
+        if not detected:
+            return
+
+        # Update in-memory device dict so info bar reflects it immediately
+        device["card_type"] = detected
+
+        # Persist to DB if device has a real ID
+        if device.get("id"):
+            db.update_card_type(device["id"], detected)
+            db.log_audit(
+                device["name"], device["ip"], username,
+                "Card Type Detected", f"type={detected}", result="success"
+            )
+            # Refresh sidebar list so the stored type is shown
+            self.after(0, self._load_devices)
+
+        # Refresh info bar to show detected type
+        self.after(0, self._update_info_bar)
 
     def _disconnect(self):
         if self._ssh:

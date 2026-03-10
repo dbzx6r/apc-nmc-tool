@@ -64,6 +64,7 @@ class DeviceDialog(ctk.CTkToplevel):
         self.resizable(False, False)
         self.grab_set()
         self.focus_set()
+        self.bind("<Return>", lambda _: self._save())
 
         self._build()
 
@@ -163,6 +164,7 @@ class MultiInputDialog(ctk.CTkToplevel):
 
         self._build(warning)
         self.geometry(f"380x{140 + len(fields) * 68 + (40 if warning else 0)}")
+        self.bind("<Return>", lambda _: self._confirm())
 
     def _build(self, warning: str):
         pad = {"padx": 20, "pady": 5}
@@ -219,6 +221,7 @@ class ConfirmDialog(ctk.CTkToplevel):
         self.grab_set()
         self.focus_set()
         self._on_confirm = on_confirm
+        self.bind("<Return>", lambda _: self._confirm())
 
         self.geometry("360x180")
 
@@ -368,6 +371,7 @@ class FirmwareDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="Password", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
         self._pw = ctk.CTkEntry(self, show="●")
         self._pw.pack(fill="x", **pad)
+        self._pw.bind("<Return>", lambda _: self._start_upload())
 
         # File selection
         ctk.CTkLabel(self, text="Firmware Files", font=("Segoe UI", 12, "bold"),
@@ -638,6 +642,7 @@ class CredentialManagerWindow(ctk.CTkToplevel):
         ctk.CTkLabel(form, text="Password:", font=_SANS_SM, width=100, anchor="w").grid(row=2, column=0, pady=(6, 0))
         self._pass_entry = ctk.CTkEntry(form, show="●", width=180)
         self._pass_entry.grid(row=2, column=1, padx=(4, 0), pady=(6, 0))
+        self._pass_entry.bind("<Return>", lambda _: self._save())
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(fill="x", padx=20, pady=(8, 16))
