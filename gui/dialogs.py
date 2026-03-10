@@ -62,10 +62,12 @@ class DeviceDialog(ctk.CTkToplevel):
         self._is_edit = device is not None
 
         self.title("Edit Device" if self._is_edit else "Add Device")
-        self.geometry("440x560")
-        self.resizable(False, False)
+        self.geometry("440x580")
+        self.minsize(380, 420)
+        self.resizable(True, True)
         self.grab_set()
         self.focus_set()
+        self.bind("<Return>", lambda _: self._save())
 
         self._build()
 
@@ -73,41 +75,45 @@ class DeviceDialog(ctk.CTkToplevel):
             self._populate(device)
 
     def _build(self):
-        pad = {"padx": 20, "pady": 5}
+        pad = {"padx": 16, "pady": 4}
 
-        ctk.CTkLabel(self, text="Device Name *", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._name = ctk.CTkEntry(self, placeholder_text="e.g. MAIN-UPS-01")
+        # ── Scrollable form area fills all available space ── #
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=0, pady=0)
+
+        ctk.CTkLabel(scroll, text="Device Name *", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._name = ctk.CTkEntry(scroll, placeholder_text="e.g. MAIN-UPS-01")
         self._name.pack(fill="x", **pad)
         self._name.bind("<Return>", lambda _: self._save())
 
-        ctk.CTkLabel(self, text="IP Address *", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._ip = ctk.CTkEntry(self, placeholder_text="e.g. 192.168.1.100")
+        ctk.CTkLabel(scroll, text="IP Address *", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._ip = ctk.CTkEntry(scroll, placeholder_text="e.g. 192.168.1.100")
         self._ip.pack(fill="x", **pad)
         self._ip.bind("<Return>", lambda _: self._save())
 
-        ctk.CTkLabel(self, text="Card Type", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._card_type = ctk.CTkComboBox(self, values=self.CARD_TYPES)
+        ctk.CTkLabel(scroll, text="Card Type", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._card_type = ctk.CTkComboBox(scroll, values=self.CARD_TYPES)
         self._card_type.set("NMC2")
         self._card_type.pack(fill="x", **pad)
 
-        ctk.CTkLabel(self, text="Group / Tag", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._group_tag = ctk.CTkEntry(self, placeholder_text="e.g. Server Room A")
+        ctk.CTkLabel(scroll, text="Group / Tag", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._group_tag = ctk.CTkEntry(scroll, placeholder_text="e.g. Server Room A")
         self._group_tag.pack(fill="x", **pad)
         self._group_tag.bind("<Return>", lambda _: self._save())
 
-        ctk.CTkLabel(self, text="Location", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._location = ctk.CTkEntry(self, placeholder_text="e.g. Rack 3, Unit 4")
+        ctk.CTkLabel(scroll, text="Location", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._location = ctk.CTkEntry(scroll, placeholder_text="e.g. Rack 3, Unit 4")
         self._location.pack(fill="x", **pad)
         self._location.bind("<Return>", lambda _: self._save())
 
-        ctk.CTkLabel(self, text="Notes", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._notes = ctk.CTkEntry(self, placeholder_text="Optional notes")
+        ctk.CTkLabel(scroll, text="Notes", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._notes = ctk.CTkEntry(scroll, placeholder_text="Optional notes")
         self._notes.pack(fill="x", **pad)
         self._notes.bind("<Return>", lambda _: self._save())
 
         # Port row
-        port_row = ctk.CTkFrame(self, fg_color="transparent")
-        port_row.pack(fill="x", padx=20, pady=5)
+        port_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        port_row.pack(fill="x", padx=16, pady=4)
         port_row.columnconfigure(0, weight=1)
         port_row.columnconfigure(1, weight=1)
 
@@ -125,10 +131,10 @@ class DeviceDialog(ctk.CTkToplevel):
         self._ftp_port.bind("<Return>", lambda _: self._save())
 
         # SSH Key File row
-        ctk.CTkLabel(self, text="SSH Key File (optional)", font=_SANS_SM,
-                     anchor="w").pack(fill="x", padx=20, pady=(5, 0))
-        key_row = ctk.CTkFrame(self, fg_color="transparent")
-        key_row.pack(fill="x", padx=20, pady=(0, 5))
+        ctk.CTkLabel(scroll, text="SSH Key File (optional)", font=_SANS_SM,
+                     anchor="w").pack(fill="x", padx=16, pady=(4, 0))
+        key_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        key_row.pack(fill="x", padx=16, pady=(0, 8))
         key_row.columnconfigure(0, weight=1)
 
         self._key_file = ctk.CTkEntry(key_row, placeholder_text="Path to private key file…")
@@ -138,16 +144,18 @@ class DeviceDialog(ctk.CTkToplevel):
         ctk.CTkButton(key_row, text="Browse", width=64, height=28,
                       command=self._browse_key).grid(row=0, column=1)
 
-        # Button row
+        # ── Fixed bottom bar — always visible, outside scroll ── #
+        ctk.CTkFrame(self, height=1, fg_color="gray30").pack(fill="x")
+
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=20, pady=(12, 8))
+        btn_frame.pack(fill="x", padx=16, pady=(8, 8))
         ctk.CTkButton(btn_frame, text="Cancel", width=90,
                       fg_color="transparent", border_width=1,
                       command=self.destroy).pack(side="right", padx=(8, 0))
         ctk.CTkButton(btn_frame, text="Save", width=90,
                       command=self._save).pack(side="right")
 
-        # Delete button (edit mode only)
+        # Delete button (edit mode only) in the fixed bottom area
         if self._is_edit and self._on_delete:
             ctk.CTkButton(
                 self,
@@ -157,7 +165,7 @@ class DeviceDialog(ctk.CTkToplevel):
                 height=30,
                 font=_SANS_SM,
                 command=self._confirm_delete,
-            ).pack(fill="x", padx=20, pady=(0, 12))
+            ).pack(fill="x", padx=16, pady=(0, 10))
 
     def _browse_key(self):
         path = filedialog.askopenfilename(
