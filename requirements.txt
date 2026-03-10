@@ -1,5 +1,5 @@
+# Runtime dependencies — installed on every machine via setup.bat
 # Versions pinned to prevent supply-chain drift.
 # Test against these exact versions before any upgrade.
 customtkinter==5.2.2
 paramiko==4.0.0
-pyinstaller>=6.6.0

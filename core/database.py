@@ -25,15 +25,16 @@ DB_PATH = _get_db_path()
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
 def initialize_db() -> None:
     conn = get_connection()
+    # Enable WAL mode once; it persists in the DB file — no need to set it on every open.
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS devices (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,

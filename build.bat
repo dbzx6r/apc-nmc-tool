@@ -1,7 +1,7 @@
 @echo off
 REM build.bat — Build APC NMC Field Tool into a single Windows .exe
 REM Run this on the Windows developer machine (not the target deploy machine).
-REM Requirements:  pip install -r requirements.txt
+REM Requirements:  pip install -r requirements.txt -r requirements-build.txt
 
 echo.
 echo ========================================

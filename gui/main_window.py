@@ -546,9 +546,12 @@ class APCToolApp(ctk.CTk):
                 device["name"], ip, username,
                 "SSH Connect Failed", err_msg, result="failure"
             )
-            self.after(0, self._update_status_bar)
-            self._current_device = None
-            self._current_user = ""
+            # H-5: reset shared state on the main thread, not the background thread
+            def _reset():
+                self._current_device = None
+                self._current_user = ""
+                self._update_status_bar()
+            self.after(0, _reset)
             return
 
         self._ssh = client
@@ -658,7 +661,7 @@ class APCToolApp(ctk.CTk):
             "Host Key Accepted",
             f"type={key_type} fp={fingerprint}",
         )
-        self._update_status_bar()
+        self.after(0, self._update_status_bar)  # C-2: schedule on main thread
 
     # ── Ping device (sidebar context menu) ──────────────────────────── #
 
@@ -744,6 +747,18 @@ class APCToolApp(ctk.CTk):
         if not ip or not mask or not gw:
             messagebox.showerror("Missing Input", "All three fields are required.")
             return
+        if not is_valid_ipv4(ip):
+            messagebox.showerror("Invalid IP",
+                                 f"'{ip}' is not a valid IPv4 address.")
+            return
+        if not is_valid_ipv4(mask):
+            messagebox.showerror("Invalid Subnet Mask",
+                                 f"'{mask}' is not a valid IPv4 subnet mask.")
+            return
+        if not is_valid_ipv4(gw):
+            messagebox.showerror("Invalid Gateway",
+                                 f"'{gw}' is not a valid IPv4 address.")
+            return
         self._send_cmd(f"tcpip -i {ip} -s {mask} -g {gw}",
                        "Change IP", f"New IP={ip} Mask={mask} GW={gw}")
 
@@ -819,14 +834,16 @@ class APCToolApp(ctk.CTk):
             self,
             ip=device["ip"],
             prefill_user=self._current_user,
-            # Audit log is written inside FirmwareDialog on successful upload
-            on_complete=lambda files: db.log_audit(
-                device.get("name", ""),
-                device.get("ip", ""),
-                self._current_user,
-                "Firmware Update",
-                f"Files: {', '.join(files)}",
-            ),
+            on_complete=lambda files: [
+                db.log_audit(
+                    device.get("name", ""),
+                    device.get("ip", ""),
+                    self._current_user,
+                    "Firmware Update",
+                    f"Files: {', '.join(files)}",
+                ),
+                self.after(0, self._update_status_bar),
+            ],
         )
         self._update_status_bar()
 
@@ -893,10 +910,30 @@ class APCToolApp(ctk.CTk):
 
     def _do_import_database(self, src_path: str):
         dest = db.DB_PATH
-        if src_path == dest:
+        # NEW-1: use samefile to handle case/symlink differences on Windows
+        try:
+            same = os.path.exists(dest) and os.path.samefile(src_path, dest)
+        except (OSError, ValueError):
+            same = False
+        if same:
             messagebox.showinfo("Same File",
                                 "That is already the active database.", parent=self)
             return
+
+        # NEW-2: verify the selected file is a valid SQLite database
+        import sqlite3 as _sqlite3
+        try:
+            with _sqlite3.connect(src_path, timeout=5) as probe:
+                probe.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+        except Exception:
+            messagebox.showerror(
+                "Invalid File",
+                "The selected file does not appear to be a valid SQLite database.\n"
+                "Please select the correct apc_devices.db file.",
+                parent=self,
+            )
+            return
+
         if os.path.exists(dest):
             overwrite = messagebox.askyesno(
                 "Overwrite Database",

@@ -35,6 +35,7 @@ class FirmwareUploader:
     FTP_PORT = 21
     BLOCK_SIZE = 8192
     CONNECT_TIMEOUT = 30
+    TRANSFER_TIMEOUT = 300  # 5-minute cap on the full transfer
 
     def upload(
         self,
@@ -137,6 +138,8 @@ class FirmwareUploader:
                 on_progress(filename, pct, uploaded[0], total)
 
         with open(fw_path, "rb") as f:
+            # Set a transfer-level timeout so a stalled upload doesn't hang forever
+            ftp.sock.settimeout(self.TRANSFER_TIMEOUT)
             ftp.storbinary(
                 f"STOR {filename}",
                 f,

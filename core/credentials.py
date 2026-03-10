@@ -59,11 +59,7 @@ def _dpapi_decrypt(b64_ciphertext: str) -> str:
     in_blob = DATA_BLOB(len(data), ctypes.cast(ctypes.c_char_p(data), ctypes.POINTER(ctypes.c_char)))
     out_blob = DATA_BLOB()
 
-    if not ctypes.windll.crypt32.CryptProtectData.__class__:
-        pass  # type checker placeholder
-
-    decrypt_fn = ctypes.windll.crypt32.CryptUnprotectData
-    if not decrypt_fn(
+    if not ctypes.windll.crypt32.CryptUnprotectData(
         ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
     ):
         raise RuntimeError("DPAPI CryptUnprotectData failed.")

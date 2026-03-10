@@ -1,0 +1,3 @@
+# Build-time dependencies — used only to compile the .exe with build.bat
+# Do NOT install these on end-user machines.
+pyinstaller>=6.6.0

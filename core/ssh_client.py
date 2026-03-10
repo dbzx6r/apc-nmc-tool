@@ -15,6 +15,8 @@ Security model — TOFU (Trust On First Use):
   - This prevents silent MITM attacks against critical infrastructure devices.
 """
 
+import base64
+import hashlib
 import re
 import socket
 import threading
@@ -201,9 +203,6 @@ class APCSSHClient:
             ]
             opts.key_types = ["ssh-rsa"]
 
-            # Apply TOFU policy to the raw transport
-            transport._preferred_keys = opts.key_types
-
             try:
                 transport.connect(username=username, password=password)
             except paramiko.AuthenticationException as e:
@@ -298,7 +297,10 @@ class _ToFUPolicy(paramiko.MissingHostKeyPolicy):
         self._save = save_fn
 
     def missing_host_key(self, client, hostname, key) -> None:
-        fp = ":".join(f"{b:02x}" for b in key.get_fingerprint())
+        # Compute SHA-256 fingerprint (standard for modern SSH clients)
+        fp = "SHA256:" + base64.b64encode(
+            hashlib.sha256(key.asbytes()).digest()
+        ).rstrip(b"=").decode("ascii")
 
         # Already trusted — fingerprint unchanged
         if self._stored_fp is not None and self._stored_fp == fp:

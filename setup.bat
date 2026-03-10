@@ -73,19 +73,21 @@ set "SHORTCUT=%USERPROFILE%\Desktop\APC NMC Tool.lnk"
 set "LAUNCH_SCRIPT=%TOOL_DIR%\launch.bat"
 set "ICON_PATH=%TOOL_DIR%\icon.ico"
 
-REM Build icon argument — only use custom icon if it exists
-set "ICON_LINE="
+REM Build the PowerShell script in a temp file to avoid CMD expansion issues
+set "PS_TMP=%TEMP%\apc_shortcut.ps1"
+(
+    echo $s = (New-Object -ComObject WScript.Shell).CreateShortcut('%SHORTCUT%')
+    echo $s.TargetPath = '%LAUNCH_SCRIPT%'
+    echo $s.WorkingDirectory = '%TOOL_DIR%'
+    echo $s.Description = 'APC NMC Field Tool'
+) > "%PS_TMP%"
 if exist "%ICON_PATH%" (
-    set "ICON_LINE=$s.IconLocation = '%ICON_PATH%';"
+    echo $s.IconLocation = '%ICON_PATH%' >> "%PS_TMP%"
 )
+echo $s.Save() >> "%PS_TMP%"
 
-powershell -NoProfile -Command ^
-    "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('%SHORTCUT%');" ^
-    "$s.TargetPath = '%LAUNCH_SCRIPT%';" ^
-    "$s.WorkingDirectory = '%TOOL_DIR%';" ^
-    "$s.Description = 'APC NMC Field Tool';" ^
-    "%ICON_LINE%" ^
-    "$s.Save();"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_TMP%"
+del "%PS_TMP%" >nul 2>&1
 
 if %errorlevel% neq 0 (
     echo [WARN] Could not create desktop shortcut automatically.

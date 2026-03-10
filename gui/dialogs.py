@@ -193,8 +193,10 @@ class MultiInputDialog(ctk.CTkToplevel):
                       command=self._confirm).pack(side="right")
 
     def _confirm(self):
-        values = {label: entry.get().strip()
-                  for label, entry in self._entries.items()}
+        values = {}
+        for label, entry in self._entries.items():
+            is_pw = any(label == f[0] and f[2] for f in self._fields)
+            values[label] = entry.get() if is_pw else entry.get().strip()
         if self._on_confirm:
             self._on_confirm(values)
         self.destroy()
