@@ -689,6 +689,117 @@ class CredentialManagerWindow(ctk.CTkToplevel):
 
 
 # ─────────────────────────────────────────────────────────────────────── #
+#  FirstRunDialog                                                          #
+# ─────────────────────────────────────────────────────────────────────── #
+
+class FirstRunDialog(ctk.CTkToplevel):
+    """
+    Shown on first launch when the device database is empty.
+    Gives the operator three choices:
+      1. Import an existing apc_devices.db file
+      2. Add devices now (opens AddDevice dialog after close)
+      3. Start empty / skip
+    """
+
+    def __init__(self, master,
+                 on_import: Callable[[str], None],
+                 on_add_device: Callable[[], None],
+                 on_skip: Callable[[], None]):
+        super().__init__(master)
+        self.title("Welcome — APC NMC Field Tool")
+        self.geometry("520x400")
+        self.resizable(False, False)
+        self.grab_set()
+        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self._skip)
+
+        self._on_import = on_import
+        self._on_add = on_add_device
+        self._on_skip = on_skip
+
+        self._build()
+
+    def _build(self):
+        # Header
+        ctk.CTkLabel(
+            self, text="🔌  Welcome to APC NMC Field Tool",
+            font=("Segoe UI", 15, "bold"),
+        ).pack(pady=(28, 4))
+        ctk.CTkLabel(
+            self,
+            text="No devices found in the database.\nChoose how you'd like to get started:",
+            font=_SANS_SM, text_color="gray60", justify="center",
+        ).pack(pady=(0, 24))
+
+        # Option 1 — Import
+        opt1 = ctk.CTkFrame(self, fg_color=("#1a2a1a", "#0d1a0d"), corner_radius=8)
+        opt1.pack(fill="x", padx=28, pady=(0, 10))
+        inner1 = ctk.CTkFrame(opt1, fg_color="transparent")
+        inner1.pack(fill="x", padx=16, pady=12)
+        ctk.CTkLabel(
+            inner1, text="📂  Import an existing database",
+            font=("Segoe UI", 11, "bold"), anchor="w",
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            inner1,
+            text="Already have an apc_devices.db from another machine? Import it here.",
+            font=_SANS_SM, text_color="gray60", anchor="w", wraplength=400,
+        ).pack(anchor="w", pady=(2, 8))
+        ctk.CTkButton(
+            inner1, text="Browse for .db file…", width=160,
+            command=self._browse_import,
+        ).pack(anchor="w")
+
+        # Option 2 — Add device
+        opt2 = ctk.CTkFrame(self, fg_color=("#1a1a2a", "#0d0d1a"), corner_radius=8)
+        opt2.pack(fill="x", padx=28, pady=(0, 10))
+        inner2 = ctk.CTkFrame(opt2, fg_color="transparent")
+        inner2.pack(fill="x", padx=16, pady=12)
+        ctk.CTkLabel(
+            inner2, text="➕  Add devices now",
+            font=("Segoe UI", 11, "bold"), anchor="w",
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            inner2,
+            text="Start building your device list. You can add more devices at any time.",
+            font=_SANS_SM, text_color="gray60", anchor="w", wraplength=400,
+        ).pack(anchor="w", pady=(2, 8))
+        ctk.CTkButton(
+            inner2, text="Add first device…", width=160,
+            command=self._add_device,
+        ).pack(anchor="w")
+
+        # Skip
+        ctk.CTkButton(
+            self, text="Skip — start with empty database",
+            fg_color="transparent", border_width=1,
+            font=_SANS_SM, width=220,
+            command=self._skip,
+        ).pack(pady=(4, 24))
+
+    def _browse_import(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Select APC Devices Database",
+            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")],
+        )
+        if path:
+            self.grab_release()
+            self.destroy()
+            self._on_import(path)
+
+    def _add_device(self):
+        self.grab_release()
+        self.destroy()
+        self._on_add()
+
+    def _skip(self):
+        self.grab_release()
+        self.destroy()
+        self._on_skip()
+
+
+# ─────────────────────────────────────────────────────────────────────── #
 #  HostKeyDialog — TOFU first-time accept                                 #
 # ─────────────────────────────────────────────────────────────────────── #
 

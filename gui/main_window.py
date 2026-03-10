@@ -13,6 +13,8 @@ Layout:
   └──────────────────────────────────────────────────────────────────┘
 """
 
+import os
+import shutil
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -30,6 +32,7 @@ from gui.dialogs import (
     ConnectDialog,
     CredentialManagerWindow,
     DeviceDialog,
+    FirstRunDialog,
     FirmwareDialog,
     HostKeyChangedDialog,
     HostKeyDialog,
@@ -75,6 +78,10 @@ class APCToolApp(ctk.CTk):
         self._refresh_device_list()
         self._set_connected_state(False)
         self._update_status_bar()
+
+        # Show first-run wizard if the device list is empty
+        if db.get_device_count() == 0:
+            self.after(300, self._show_first_run)
 
     # ── Layout builders ──────────────────────────────────────────────── #
 
@@ -172,6 +179,9 @@ class APCToolApp(ctk.CTk):
         ctk.CTkButton(s, text="🔑  Credential Manager", height=28, font=_SANS_SM,
                       fg_color="transparent", border_width=1,
                       command=self._open_credential_manager).pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkButton(s, text="📂  Import Database", height=28, font=_SANS_SM,
+                      fg_color="transparent", border_width=1,
+                      command=self._import_database).pack(fill="x", padx=12, pady=(0, 4))
         self._disconnect_btn = ctk.CTkButton(
             s, text="⏏  Disconnect", height=28, font=_SANS_SM,
             fg_color="#7a1f1f", hover_color="#a33030",
@@ -858,6 +868,57 @@ class APCToolApp(ctk.CTk):
         cmd = dlg.get_input()
         if cmd and cmd.strip():
             self._send_cmd(cmd.strip(), "Manual Command", cmd.strip())
+
+    # ── First-run wizard ─────────────────────────────────────────────── #
+
+    def _show_first_run(self):
+        FirstRunDialog(
+            self,
+            on_import=self._do_import_database,
+            on_add_device=self._add_device,
+            on_skip=lambda: None,
+        )
+
+    # ── Import database ──────────────────────────────────────────────── #
+
+    def _import_database(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Import APC Devices Database",
+            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")],
+        )
+        if path:
+            self._do_import_database(path)
+
+    def _do_import_database(self, src_path: str):
+        dest = db.DB_PATH
+        if src_path == dest:
+            messagebox.showinfo("Same File",
+                                "That is already the active database.", parent=self)
+            return
+        if os.path.exists(dest):
+            overwrite = messagebox.askyesno(
+                "Overwrite Database",
+                f"This will REPLACE the current database at:\n{dest}\n\n"
+                "All existing devices and audit log entries will be lost.\n\n"
+                "Are you sure?",
+                parent=self,
+            )
+            if not overwrite:
+                return
+        try:
+            shutil.copy2(src_path, dest)
+            db.initialize_db()   # ensure schema is up to date
+            self._refresh_device_list()
+            count = db.get_device_count()
+            messagebox.showinfo(
+                "Import Successful",
+                f"Database imported successfully.\n{count} device(s) loaded.",
+                parent=self,
+            )
+        except Exception as e:
+            messagebox.showerror("Import Failed", str(e), parent=self)
 
     # ── Menu / tool buttons ──────────────────────────────────────────── #
 

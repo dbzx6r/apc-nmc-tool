@@ -140,6 +140,13 @@ def delete_device(device_id: int) -> None:
     conn.close()
 
 
+def get_device_count() -> int:
+    conn = get_connection()
+    count = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+    conn.close()
+    return count
+
+
 def update_last_connected(device_id: int) -> None:
     conn = get_connection()
     conn.execute(
