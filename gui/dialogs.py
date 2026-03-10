@@ -53,18 +53,19 @@ class DeviceDialog(ctk.CTkToplevel):
     CARD_TYPES = ["NMC2", "NMC3", "NMC (gen 1)"]
 
     def __init__(self, master, device: Optional[Dict] = None,
-                 on_save: Optional[Callable] = None):
+                 on_save: Optional[Callable] = None,
+                 on_delete: Optional[Callable] = None):
         super().__init__(master)
         self._device = device
         self._on_save = on_save
+        self._on_delete = on_delete
         self._is_edit = device is not None
 
         self.title("Edit Device" if self._is_edit else "Add Device")
-        self.geometry("420x400")
+        self.geometry("440x560")
         self.resizable(False, False)
         self.grab_set()
         self.focus_set()
-        self.bind("<Return>", lambda _: self._save())
 
         self._build()
 
@@ -72,43 +73,115 @@ class DeviceDialog(ctk.CTkToplevel):
             self._populate(device)
 
     def _build(self):
-        pad = {"padx": 20, "pady": 6}
+        pad = {"padx": 20, "pady": 5}
 
         ctk.CTkLabel(self, text="Device Name *", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
         self._name = ctk.CTkEntry(self, placeholder_text="e.g. MAIN-UPS-01")
         self._name.pack(fill="x", **pad)
+        self._name.bind("<Return>", lambda _: self._save())
 
         ctk.CTkLabel(self, text="IP Address *", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
         self._ip = ctk.CTkEntry(self, placeholder_text="e.g. 192.168.1.100")
         self._ip.pack(fill="x", **pad)
+        self._ip.bind("<Return>", lambda _: self._save())
 
         ctk.CTkLabel(self, text="Card Type", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
         self._card_type = ctk.CTkComboBox(self, values=self.CARD_TYPES)
         self._card_type.set("NMC2")
         self._card_type.pack(fill="x", **pad)
 
+        ctk.CTkLabel(self, text="Group / Tag", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
+        self._group_tag = ctk.CTkEntry(self, placeholder_text="e.g. Server Room A")
+        self._group_tag.pack(fill="x", **pad)
+        self._group_tag.bind("<Return>", lambda _: self._save())
+
         ctk.CTkLabel(self, text="Location", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
-        self._location = ctk.CTkEntry(self, placeholder_text="e.g. Server Room A")
+        self._location = ctk.CTkEntry(self, placeholder_text="e.g. Rack 3, Unit 4")
         self._location.pack(fill="x", **pad)
+        self._location.bind("<Return>", lambda _: self._save())
 
         ctk.CTkLabel(self, text="Notes", font=_SANS_SM, anchor="w").pack(fill="x", **pad)
         self._notes = ctk.CTkEntry(self, placeholder_text="Optional notes")
         self._notes.pack(fill="x", **pad)
+        self._notes.bind("<Return>", lambda _: self._save())
 
+        # Port row
+        port_row = ctk.CTkFrame(self, fg_color="transparent")
+        port_row.pack(fill="x", padx=20, pady=5)
+        port_row.columnconfigure(0, weight=1)
+        port_row.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(port_row, text="SSH Port", font=_SANS_SM, anchor="w").grid(
+            row=0, column=0, sticky="w", padx=(0, 4))
+        ctk.CTkLabel(port_row, text="FTP Port", font=_SANS_SM, anchor="w").grid(
+            row=0, column=1, sticky="w", padx=(4, 0))
+
+        self._ssh_port = ctk.CTkEntry(port_row, placeholder_text="22")
+        self._ssh_port.grid(row=1, column=0, sticky="ew", padx=(0, 4))
+        self._ssh_port.bind("<Return>", lambda _: self._save())
+
+        self._ftp_port = ctk.CTkEntry(port_row, placeholder_text="21")
+        self._ftp_port.grid(row=1, column=1, sticky="ew", padx=(4, 0))
+        self._ftp_port.bind("<Return>", lambda _: self._save())
+
+        # SSH Key File row
+        ctk.CTkLabel(self, text="SSH Key File (optional)", font=_SANS_SM,
+                     anchor="w").pack(fill="x", padx=20, pady=(5, 0))
+        key_row = ctk.CTkFrame(self, fg_color="transparent")
+        key_row.pack(fill="x", padx=20, pady=(0, 5))
+        key_row.columnconfigure(0, weight=1)
+
+        self._key_file = ctk.CTkEntry(key_row, placeholder_text="Path to private key file…")
+        self._key_file.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._key_file.bind("<Return>", lambda _: self._save())
+
+        ctk.CTkButton(key_row, text="Browse", width=64, height=28,
+                      command=self._browse_key).grid(row=0, column=1)
+
+        # Button row
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=20, pady=(16, 20))
-        ctk.CTkButton(btn_frame, text="Cancel", width=100,
+        btn_frame.pack(fill="x", padx=20, pady=(12, 8))
+        ctk.CTkButton(btn_frame, text="Cancel", width=90,
                       fg_color="transparent", border_width=1,
                       command=self.destroy).pack(side="right", padx=(8, 0))
-        ctk.CTkButton(btn_frame, text="Save", width=100,
+        ctk.CTkButton(btn_frame, text="Save", width=90,
                       command=self._save).pack(side="right")
+
+        # Delete button (edit mode only)
+        if self._is_edit and self._on_delete:
+            ctk.CTkButton(
+                self,
+                text="🗑  Delete Device",
+                fg_color="#7a1f1f",
+                hover_color="#a33030",
+                height=30,
+                font=_SANS_SM,
+                command=self._confirm_delete,
+            ).pack(fill="x", padx=20, pady=(0, 12))
+
+    def _browse_key(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Select SSH Private Key File",
+            filetypes=[
+                ("Private Key Files", "*.pem *.key *.ppk *.rsa *.openssh"),
+                ("All Files", "*.*"),
+            ],
+        )
+        if path:
+            self._key_file.delete(0, "end")
+            self._key_file.insert(0, path)
 
     def _populate(self, d: Dict):
         self._name.insert(0, d.get("name", ""))
         self._ip.insert(0, d.get("ip", ""))
         self._card_type.set(d.get("card_type", "NMC2"))
+        self._group_tag.insert(0, d.get("group_tag", "") or "")
         self._location.insert(0, d.get("location", ""))
         self._notes.insert(0, d.get("notes", ""))
+        self._ssh_port.insert(0, str(d.get("ssh_port", 22) or 22))
+        self._ftp_port.insert(0, str(d.get("ftp_port", 21) or 21))
+        self._key_file.insert(0, d.get("key_file", "") or "")
 
     def _save(self):
         name = self._name.get().strip().upper()
@@ -124,17 +197,51 @@ class DeviceDialog(ctk.CTkToplevel):
             )
             return
 
+        # Validate SSH port
+        ssh_port_str = self._ssh_port.get().strip() or "22"
+        try:
+            ssh_port = int(ssh_port_str)
+            if not (1 <= ssh_port <= 65535):
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("Invalid Port", "SSH Port must be an integer between 1 and 65535.", parent=self)
+            return
+
+        # Validate FTP port
+        ftp_port_str = self._ftp_port.get().strip() or "21"
+        try:
+            ftp_port = int(ftp_port_str)
+            if not (1 <= ftp_port <= 65535):
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("Invalid Port", "FTP Port must be an integer between 1 and 65535.", parent=self)
+            return
+
         payload = {
             "name": name,
             "ip": ip,
             "card_type": self._card_type.get(),
+            "group_tag": self._group_tag.get().strip(),
             "location": self._location.get().strip(),
             "notes": self._notes.get().strip(),
+            "ssh_port": ssh_port,
+            "ftp_port": ftp_port,
+            "key_file": self._key_file.get().strip(),
         }
 
         if self._on_save:
             self._on_save(payload)
         self.destroy()
+
+    def _confirm_delete(self):
+        if messagebox.askyesno(
+            "Delete Device",
+            f"Delete this device?\nThis cannot be undone.",
+            parent=self,
+        ):
+            self.destroy()
+            if self._on_delete:
+                self._on_delete()
 
 
 # ─────────────────────────────────────────────────────────────────────── #
@@ -313,6 +420,7 @@ class FirmwareDialog(ctk.CTkToplevel):
     """Firmware update wizard: select .bin files, enter FTP credentials, upload."""
 
     def __init__(self, master, ip: str, prefill_user: str = "",
+                 ftp_port: int = 21,
                  on_complete: Optional[Callable[[List[str]], None]] = None):
         super().__init__(master)
         self.title("Firmware Update")
@@ -325,6 +433,7 @@ class FirmwareDialog(ctk.CTkToplevel):
         self._files: List[str] = []
         self._uploader = FirmwareUploader()
         self._on_complete = on_complete  # called with list of uploaded filenames
+        self._ftp_port = ftp_port
 
         self._build(prefill_user)
 
@@ -474,6 +583,7 @@ class FirmwareDialog(ctk.CTkToplevel):
                 firmware_files=self._files,
                 on_progress=on_progress,
                 on_status=on_status,
+                port=self._ftp_port,
             )
             uploaded_names = [os.path.basename(f) for f in self._files]
             self.after(0, lambda: self._progress_bar.set(1.0))
@@ -944,3 +1054,165 @@ class HostKeyChangedDialog(ctk.CTkToplevel):
         self.grab_release()
         self.destroy()
         self._on_reject()
+
+
+# ─────────────────────────────────────────────────────────────────────── #
+#  MacroDialog — CLI Macro manager                                        #
+# ─────────────────────────────────────────────────────────────────────── #
+
+class MacroDialog(ctk.CTkToplevel):
+    """Create, edit, delete, and run saved CLI command macros."""
+
+    def __init__(self, master, on_run: Optional[Callable[[List[str]], None]] = None):
+        super().__init__(master)
+        self.title("CLI Macros")
+        self.geometry("560x500")
+        self.resizable(False, False)
+        self.grab_set()
+        self.focus_set()
+
+        self._on_run = on_run
+        self._selected_macro_id: Optional[int] = None
+
+        self._build()
+        self._load_macros()
+
+    def _build(self):
+        # Main horizontal split
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.pack(fill="both", expand=True, padx=12, pady=12)
+        main.grid_columnconfigure(0, weight=0)
+        main.grid_columnconfigure(1, weight=1)
+        main.grid_rowconfigure(0, weight=1)
+
+        # Left panel — macro list
+        left = ctk.CTkFrame(main, width=180, fg_color=("#1a1a1a", "#111111"))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left.grid_propagate(False)
+
+        ctk.CTkLabel(left, text="Saved Macros", font=("Segoe UI", 10, "bold"),
+                     text_color="gray60").pack(pady=(10, 4), padx=8, anchor="w")
+
+        self._macro_scroll = ctk.CTkScrollableFrame(left, fg_color="transparent")
+        self._macro_scroll.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+
+        # Right panel — edit form
+        right = ctk.CTkFrame(main, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_rowconfigure(2, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(right, text="Macro Name", font=_SANS_SM, anchor="w").grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
+        self._name_entry = ctk.CTkEntry(right, placeholder_text="e.g. Full Config Dump")
+        self._name_entry.grid(row=1, column=0, sticky="ew")
+
+        ctk.CTkLabel(right, text="Commands (one per line)", font=_SANS_SM,
+                     anchor="w").grid(row=2, column=0, sticky="w", pady=(8, 2))
+        self._cmd_box = ctk.CTkTextbox(right, font=("Consolas", 11), height=220)
+        self._cmd_box.grid(row=3, column=0, sticky="nsew")
+        right.grid_rowconfigure(3, weight=1)
+
+        # Bottom buttons
+        btn_row = ctk.CTkFrame(right, fg_color="transparent")
+        btn_row.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+
+        ctk.CTkButton(btn_row, text="▶  Run", width=80, height=30,
+                      fg_color="#1a4a1a", hover_color="#2a6a2a",
+                      command=self._run).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(btn_row, text="💾  Save", width=80, height=30,
+                      command=self._save).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(btn_row, text="🗑  Delete", width=80, height=30,
+                      fg_color="#7a1f1f", hover_color="#a33030",
+                      command=self._delete).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(btn_row, text="New", width=60, height=30,
+                      fg_color="transparent", border_width=1,
+                      command=self._new).pack(side="left")
+        ctk.CTkButton(btn_row, text="Close", width=60, height=30,
+                      fg_color="transparent", border_width=1,
+                      command=self.destroy).pack(side="right")
+
+    def _load_macros(self):
+        for w in self._macro_scroll.winfo_children():
+            w.destroy()
+
+        macros = db.get_all_macros()
+        for m in macros:
+            row = ctk.CTkFrame(self._macro_scroll, fg_color="transparent")
+            row.pack(fill="x", pady=1)
+            row.grid_columnconfigure(0, weight=1)
+
+            name_btn = ctk.CTkButton(
+                row, text=m["name"], anchor="w", height=28,
+                fg_color="transparent", hover_color=("gray70", "gray30"),
+                font=_SANS_SM,
+                command=lambda macro=m: self._select_macro(macro),
+            )
+            name_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+
+            ctk.CTkButton(
+                row, text="▶", width=28, height=28,
+                fg_color="#1a4a1a", hover_color="#2a6a2a",
+                font=_SANS_SM,
+                command=lambda macro=m: self._run_macro(macro),
+            ).grid(row=0, column=1)
+
+        if not macros:
+            ctk.CTkLabel(self._macro_scroll, text="No macros yet.\nCreate one →",
+                         font=_SANS_SM, text_color="gray50").pack(pady=12)
+
+    def _select_macro(self, macro: Dict):
+        self._selected_macro_id = macro["id"]
+        self._name_entry.delete(0, "end")
+        self._name_entry.insert(0, macro["name"])
+        self._cmd_box.delete("1.0", "end")
+        self._cmd_box.insert("1.0", macro["commands"])
+
+    def _new(self):
+        self._selected_macro_id = None
+        self._name_entry.delete(0, "end")
+        self._cmd_box.delete("1.0", "end")
+        self._name_entry.focus_set()
+
+    def _save(self):
+        name = self._name_entry.get().strip()
+        commands = self._cmd_box.get("1.0", "end").strip()
+        if not name:
+            messagebox.showerror("Missing Name", "Enter a macro name.", parent=self)
+            return
+        try:
+            if self._selected_macro_id is not None:
+                db.update_macro(self._selected_macro_id, name, commands)
+            else:
+                self._selected_macro_id = db.add_macro(name, commands)
+        except Exception as e:
+            messagebox.showerror("Save Error", str(e), parent=self)
+            return
+        self._load_macros()
+
+    def _delete(self):
+        if self._selected_macro_id is None:
+            return
+        name = self._name_entry.get().strip() or "this macro"
+        if messagebox.askyesno("Delete Macro", f"Delete '{name}'?", parent=self):
+            db.delete_macro(self._selected_macro_id)
+            self._selected_macro_id = None
+            self._name_entry.delete(0, "end")
+            self._cmd_box.delete("1.0", "end")
+            self._load_macros()
+
+    def _run_macro(self, macro: Dict):
+        commands = [c for c in macro["commands"].splitlines() if c.strip()]
+        if not commands:
+            messagebox.showwarning("Empty Macro", "This macro has no commands.", parent=self)
+            return
+        if self._on_run:
+            self._on_run(commands)
+
+    def _run(self):
+        commands = [c for c in self._cmd_box.get("1.0", "end").splitlines() if c.strip()]
+        if not commands:
+            messagebox.showwarning("Empty Macro", "No commands to run.", parent=self)
+            return
+        if self._on_run:
+            self._on_run(commands)

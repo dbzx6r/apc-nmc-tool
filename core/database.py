@@ -34,7 +34,6 @@ def get_connection() -> sqlite3.Connection:
 def initialize_db() -> None:
     conn = get_connection()
     try:
-        # Enable WAL mode once; it persists in the DB file — no need to set it on every open.
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS devices (
@@ -64,9 +63,6 @@ def initialize_db() -> None:
                 value TEXT NOT NULL DEFAULT ''
             );
 
-            -- TOFU host key store: fingerprints accepted by the operator.
-            -- If a device's fingerprint changes and no override is given, the
-            -- connection is blocked to prevent MITM attacks.
             CREATE TABLE IF NOT EXISTS host_keys (
                 ip          TEXT PRIMARY KEY,
                 key_type    TEXT NOT NULL,
@@ -74,7 +70,28 @@ def initialize_db() -> None:
                 accepted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 accepted_by TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS macros (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                name     TEXT NOT NULL UNIQUE,
+                commands TEXT NOT NULL DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
         """)
+
+        # Schema migrations — wrapped in try/except so they're safe to run repeatedly
+        migrations = [
+            "ALTER TABLE devices ADD COLUMN group_tag TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE devices ADD COLUMN ssh_port INTEGER NOT NULL DEFAULT 22",
+            "ALTER TABLE devices ADD COLUMN ftp_port INTEGER NOT NULL DEFAULT 21",
+            "ALTER TABLE devices ADD COLUMN key_file TEXT NOT NULL DEFAULT ''",
+        ]
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
         conn.commit()
     finally:
         conn.close()
@@ -115,12 +132,15 @@ def get_device_by_id(device_id: int) -> Optional[Dict[str, Any]]:
 
 
 def add_device(name: str, ip: str, card_type: str = 'NMC2',
-               notes: str = '', location: str = '') -> int:
+               notes: str = '', location: str = '', group_tag: str = '',
+               ssh_port: int = 22, ftp_port: int = 21, key_file: str = '') -> int:
     conn = get_connection()
     try:
         cur = conn.execute(
-            "INSERT INTO devices (name, ip, card_type, notes, location) VALUES (?,?,?,?,?)",
-            (name.strip().upper(), ip.strip(), card_type, notes.strip(), location.strip())
+            """INSERT INTO devices (name, ip, card_type, notes, location, group_tag, ssh_port, ftp_port, key_file)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (name.strip().upper(), ip.strip(), card_type, notes.strip(), location.strip(),
+             group_tag.strip(), ssh_port, ftp_port, key_file.strip())
         )
         device_id = cur.lastrowid
         conn.commit()
@@ -130,15 +150,17 @@ def add_device(name: str, ip: str, card_type: str = 'NMC2',
 
 
 def update_device(device_id: int, name: str, ip: str, card_type: str,
-                  notes: str = '', location: str = '') -> None:
+                  notes: str = '', location: str = '', group_tag: str = '',
+                  ssh_port: int = 22, ftp_port: int = 21, key_file: str = '') -> None:
     conn = get_connection()
     try:
         conn.execute(
             """UPDATE devices
-               SET name=?, ip=?, card_type=?, notes=?, location=?
+               SET name=?, ip=?, card_type=?, notes=?, location=?, group_tag=?, ssh_port=?, ftp_port=?, key_file=?
                WHERE id=?""",
             (name.strip().upper(), ip.strip(), card_type,
-             notes.strip(), location.strip(), device_id)
+             notes.strip(), location.strip(), group_tag.strip(),
+             ssh_port, ftp_port, key_file.strip(), device_id)
         )
         conn.commit()
     finally:
@@ -183,6 +205,63 @@ def update_card_type(device_id: int, card_type: str) -> None:
             (card_type, device_id)
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_all_groups() -> List[str]:
+    """Return sorted list of distinct non-empty group tags."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT group_tag FROM devices WHERE group_tag != '' ORDER BY group_tag"
+        ).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
+def add_macro(name: str, commands: str) -> int:
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            "INSERT INTO macros (name, commands) VALUES (?,?)",
+            (name.strip(), commands)
+        )
+        macro_id = cur.lastrowid
+        conn.commit()
+        return macro_id
+    finally:
+        conn.close()
+
+
+def update_macro(macro_id: int, name: str, commands: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE macros SET name=?, commands=? WHERE id=?",
+            (name.strip(), commands, macro_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_macro(macro_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM macros WHERE id = ?", (macro_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_all_macros() -> List[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM macros ORDER BY name ASC"
+        ).fetchall()]
     finally:
         conn.close()
 

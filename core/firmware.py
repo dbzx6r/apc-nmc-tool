@@ -45,6 +45,7 @@ class FirmwareUploader:
         firmware_files: List[str],
         on_progress: Optional[Callable[[str, float, int, int], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
+        port: int = 21,
     ) -> None:
         """
         Upload one or more firmware .bin files to the APC NMC via FTP.
@@ -76,9 +77,9 @@ class FirmwareUploader:
         ftp = ftplib.FTP()
         try:
             if on_status:
-                on_status(f"Connecting to FTP server on {ip}:{self.FTP_PORT}...")
+                on_status(f"Connecting to FTP server on {ip}:{port}...")
 
-            ftp.connect(ip, self.FTP_PORT, timeout=self.CONNECT_TIMEOUT)
+            ftp.connect(ip, port, timeout=self.CONNECT_TIMEOUT)
             ftp.login(username, password)
             # storbinary() calls TYPE I internally; set_pasv ensures passive mode
             ftp.set_pasv(True)
@@ -106,7 +107,7 @@ class FirmwareUploader:
             raise FirmwareError(f"FTP temporary error: {e}")
         except ConnectionRefusedError:
             raise FirmwareError(
-                f"FTP connection refused on {ip}:{self.FTP_PORT}.\n"
+                f"FTP connection refused on {ip}:{port}.\n"
                 "Ensure FTP is enabled in the device network settings."
             )
         except OSError as e:

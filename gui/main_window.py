@@ -13,9 +13,13 @@ Layout:
   └──────────────────────────────────────────────────────────────────┘
 """
 
+APP_VERSION = "2.0.0"
+
+import datetime
 import os
 import shutil
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
 from typing import Dict, List, Optional
@@ -36,6 +40,7 @@ from gui.dialogs import (
     FirmwareDialog,
     HostKeyChangedDialog,
     HostKeyDialog,
+    MacroDialog,
     MultiInputDialog,
     is_valid_ipv4,
 )
@@ -48,10 +53,10 @@ _SANS = ("Segoe UI", 11)
 _SANS_SM = ("Segoe UI", 10)
 
 # Terminal colour tags
-_TAG_CMD = "cmd"        # sent commands  → blue
-_TAG_ERR = "err"        # error text     → red
-_TAG_OK  = "ok"         # success        → green
-_TAG_WARN = "warn"      # warning        → orange
+_TAG_CMD  = "cmd"   # sent commands  → blue
+_TAG_ERR  = "err"   # error text     → red
+_TAG_OK   = "ok"    # success        → green
+_TAG_WARN = "warn"  # warning        → orange
 
 
 class APCToolApp(ctk.CTk):
@@ -61,7 +66,7 @@ class APCToolApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("APC NMC Field Tool")
+        self.title(f"APC NMC Field Tool  v{APP_VERSION}")
         self.geometry("1280x780")
         self.minsize(960, 620)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -72,12 +77,26 @@ class APCToolApp(ctk.CTk):
         self._current_device: Optional[Dict] = None
         self._current_user: str = ""
         self._selected_device_id: Optional[int] = None
-        self._device_btns: Dict[int, ctk.CTkButton] = {}
+        self._device_btns: Dict[int, ctk.CTkFrame] = {}  # device_id → row frame
+
+        # Search debounce
+        self._search_after_id = None
+
+        # Command history
+        self._cmd_history: List[str] = []
+        self._cmd_history_idx: int = -1
+
+        # Connecting animation
+        self._connecting_anim: bool = False
 
         self._build_layout()
         self._refresh_device_list()
         self._set_connected_state(False)
         self._update_status_bar()
+
+        # Keyboard shortcuts
+        self.bind("<Control-d>", lambda _: self._disconnect() if self._ssh else None)
+        self.bind("<Escape>", lambda _: self._disconnect() if self._ssh else None)
 
         # Show first-run wizard if the device list is empty
         if db.get_device_count() == 0:
@@ -128,30 +147,28 @@ class APCToolApp(ctk.CTk):
                       fg_color="transparent", border_width=1,
                       command=self._open_audit_viewer).pack(side="right")
 
-        # Search
+        # Search (debounced)
         self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._refresh_device_list())
+        self._search_var.trace_add("write", lambda *_: self._debounced_search())
         ctk.CTkEntry(s, textvariable=self._search_var,
                      placeholder_text="🔍  search devices…",
                      height=32).pack(fill="x", padx=12, pady=(0, 6))
 
-        # Device list
-        self._device_scroll = ctk.CTkScrollableFrame(s, height=240)
-        self._device_scroll.pack(fill="x", padx=8, pady=(0, 4))
+        # Device list — fills available space
+        self._device_scroll = ctk.CTkScrollableFrame(s)
+        self._device_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 4))
 
-        # CRUD buttons
+        # CRUD buttons (no delete button — delete is inside DeviceDialog)
         crud = ctk.CTkFrame(s, fg_color="transparent")
         crud.pack(fill="x", padx=12, pady=(0, 8))
         ctk.CTkButton(crud, text="＋ Add", width=68, height=28, font=_SANS_SM,
                       command=self._add_device).pack(side="left", padx=(0, 4))
-        self._edit_btn = ctk.CTkButton(crud, text="✎ Edit", width=60, height=28, font=_SANS_SM,
-                                       fg_color="transparent", border_width=1,
-                                       command=self._edit_device, state="disabled")
+        self._edit_btn = ctk.CTkButton(
+            crud, text="✎ Edit", width=60, height=28, font=_SANS_SM,
+            fg_color="transparent", border_width=1,
+            command=self._edit_device, state="disabled",
+        )
         self._edit_btn.pack(side="left", padx=(0, 4))
-        self._del_btn = ctk.CTkButton(crud, text="✕", width=36, height=28, font=_SANS_SM,
-                                      fg_color="#7a1f1f", hover_color="#a33030",
-                                      command=self._delete_device, state="disabled")
-        self._del_btn.pack(side="left")
 
         ctk.CTkFrame(s, height=1, fg_color="gray30").pack(fill="x", padx=12, pady=(4, 10))
 
@@ -174,6 +191,13 @@ class APCToolApp(ctk.CTk):
         self._quick_connect_btn.pack(fill="x", padx=12, pady=(4, 0))
 
         ctk.CTkFrame(s, height=1, fg_color="gray30").pack(fill="x", padx=12, pady=(12, 6))
+
+        # Ping All button
+        ctk.CTkButton(
+            s, text="📡  Ping All Devices", height=28, font=_SANS_SM,
+            fg_color="transparent", border_width=1,
+            command=self._ping_all_devices,
+        ).pack(fill="x", padx=12, pady=(0, 4))
 
         # Bottom buttons
         ctk.CTkButton(s, text="🔑  Credential Manager", height=28, font=_SANS_SM,
@@ -216,25 +240,27 @@ class APCToolApp(ctk.CTk):
         self._action_buttons: List[ctk.CTkButton] = []
 
         ACTIONS = [
-            ("ℹ  System Info",     self._action_system_info),
-            ("🌐  Network",        self._action_network),
-            ("🔄  Change IP",      self._action_change_ip),
-            ("🔑  Change Password",self._action_change_password),
-            ("🔃  Reboot",         self._action_reboot),
-            ("⬆  Firmware",       self._action_firmware),
-            ("📝  System Name",    self._action_system_name),
-            ("📌  Location",       self._action_location),
-            ("👤  Contact",        self._action_contact),
-            ("📋  Event Log",      self._action_event_log),
-            ("📊  UPS Status",     self._action_ups_status),
-            ("🔍  DNS Settings",   self._action_dns),
-            ("❓  Help",           self._action_help),
-            ("⌨  Manual Command",  self._action_manual),
+            ("ℹ  System Info",      self._action_system_info),
+            ("🌐  Network",         self._action_network),
+            ("🔄  Change IP",       self._action_change_ip),
+            ("🔑  Change Password", self._action_change_password),
+            ("🔃  Reboot",          self._action_reboot),
+            ("⬆  Firmware",        self._action_firmware),
+            ("📝  System Name",     self._action_system_name),
+            ("📌  Location",        self._action_location),
+            ("👤  Contact",         self._action_contact),
+            ("📋  Event Log",       self._action_event_log),
+            ("📊  UPS Status",      self._action_ups_status),
+            ("🔍  DNS Settings",    self._action_dns),
+            ("❓  Help",            self._action_help),
+            ("⌨  Manual Command",   self._action_manual),
+            ("💾  Config Snapshot", self._action_config_snapshot),
+            ("▶  Macros",           self._action_macros),
         ]
 
         row_frame = None
         for i, (label, cmd) in enumerate(ACTIONS):
-            if i % 7 == 0:
+            if i % 8 == 0:
                 row_frame = ctk.CTkFrame(frame, fg_color="transparent")
                 row_frame.pack(fill="x", padx=8, pady=2)
             btn = ctk.CTkButton(
@@ -249,7 +275,7 @@ class APCToolApp(ctk.CTk):
     def _build_terminal(self, parent):
         term_frame = ctk.CTkFrame(parent, corner_radius=0, fg_color="transparent")
         term_frame.grid(row=2, column=0, sticky="nsew")
-        term_frame.grid_rowconfigure(0, weight=1)
+        term_frame.grid_rowconfigure(1, weight=1)
         term_frame.grid_columnconfigure(0, weight=1)
 
         # Header row
@@ -272,7 +298,6 @@ class APCToolApp(ctk.CTk):
             wrap="char",
         )
         self._terminal.grid(row=1, column=0, sticky="nsew", padx=0)
-        term_frame.grid_rowconfigure(1, weight=1)
         self._terminal.configure(state="disabled")
 
         # Configure colour tags on the underlying tk.Text
@@ -299,6 +324,8 @@ class APCToolApp(ctk.CTk):
         )
         self._cmd_entry.grid(row=0, column=0, sticky="ew", padx=(26, 4), pady=4)
         self._cmd_entry.bind("<Return>", lambda _: self._terminal_send())
+        self._cmd_entry.bind("<Up>",     self._history_prev)
+        self._cmd_entry.bind("<Down>",   self._history_next)
 
         self._send_btn = ctk.CTkButton(
             input_row, text="Send", width=64, height=30,
@@ -326,6 +353,9 @@ class APCToolApp(ctk.CTk):
                                        font=_SANS_SM, text_color="gray50", anchor="e")
         self._status_db.pack(side="right", padx=12)
 
+        ctk.CTkLabel(bar, text=f"v{APP_VERSION}", font=_SANS_SM,
+                     text_color="gray40").pack(side="right", padx=(0, 8))
+
     # ── Device list management ───────────────────────────────────────── #
 
     def _refresh_device_list(self):
@@ -340,9 +370,36 @@ class APCToolApp(ctk.CTk):
             devices = [d for d in devices
                        if query in d["name"].upper() or query in d["ip"]]
 
+        # Sort by (group_tag, name) so grouped devices appear together
+        devices.sort(key=lambda d: (d.get("group_tag", "") or "", d["name"]))
+
+        current_group: Optional[str] = object()  # sentinel — something that won't match ""
+
         for d in devices:
-            btn = ctk.CTkButton(
-                self._device_scroll,
+            group = d.get("group_tag", "") or ""
+
+            # Group header
+            if group != current_group:
+                current_group = group
+                if group:
+                    hdr = ctk.CTkFrame(self._device_scroll,
+                                       fg_color=("#2a2a2a", "#1a1a1a"), corner_radius=4)
+                    hdr.pack(fill="x", padx=2, pady=(6, 2))
+                    ctk.CTkLabel(
+                        hdr, text=f"  {group}",
+                        font=("Segoe UI", 9, "bold"),
+                        text_color="gray60", anchor="w",
+                    ).pack(fill="x", padx=4, pady=3)
+
+            # Device row frame
+            row_frame = ctk.CTkFrame(self._device_scroll, fg_color="transparent",
+                                     corner_radius=4)
+            row_frame.pack(fill="x", pady=1)
+            row_frame.grid_columnconfigure(0, weight=1)
+
+            # Info area (clickable → select + open edit dialog)
+            info_btn = ctk.CTkButton(
+                row_frame,
                 text=f"  {d['name']}\n  {d['ip']}  ·  {d['card_type']}",
                 anchor="w",
                 height=46,
@@ -350,13 +407,26 @@ class APCToolApp(ctk.CTk):
                 fg_color="transparent",
                 hover_color=("gray75", "gray25"),
                 text_color=("gray10", "gray90"),
-                command=lambda dev=d: self._select_device(dev),
+                command=lambda dev=d: [self._select_device(dev), self._edit_device_direct(dev)],
             )
-            btn.pack(fill="x", pady=1)
-            self._device_btns[d["id"]] = btn
+            info_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
 
-            btn.bind("<Double-Button-1>", lambda _, dev=d: self._start_connect(dev))
-            btn.bind("<Button-3>", lambda e, dev=d: self._device_context_menu(e, dev))
+            # Connect button
+            conn_btn = ctk.CTkButton(
+                row_frame,
+                text="⚡",
+                width=36, height=36,
+                fg_color="#1a4a1a", hover_color="#2a6a2a",
+                font=_SANS_SM,
+                command=lambda dev=d: self._start_connect(dev),
+            )
+            conn_btn.grid(row=0, column=1, padx=(0, 2))
+
+            self._device_btns[d["id"]] = row_frame
+
+            # Right-click context menu on all sub-widgets
+            for widget in (row_frame, info_btn, conn_btn):
+                widget.bind("<Button-3>", lambda e, dev=d: self._device_context_menu(e, dev))
 
         if not devices:
             ctk.CTkLabel(
@@ -367,25 +437,29 @@ class APCToolApp(ctk.CTk):
 
         self._update_status_bar()
 
+    def _debounced_search(self):
+        if self._search_after_id:
+            self.after_cancel(self._search_after_id)
+        self._search_after_id = self.after(300, self._refresh_device_list)
+
     def _select_device(self, device: Dict):
         self._selected_device_id = device["id"]
-        for did, btn in self._device_btns.items():
-            btn.configure(fg_color=(
-                ("gray75", "gray30") if did == device["id"] else "transparent"
+        for did, frame in self._device_btns.items():
+            frame.configure(fg_color=(
+                ("gray20", "gray20") if did == device["id"] else "transparent"
             ))
         self._edit_btn.configure(state="normal")
-        self._del_btn.configure(state="normal")
 
     def _device_context_menu(self, event, device: Dict):
         self._select_device(device)
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="⚡  Connect", command=lambda: self._start_connect(device))
-        menu.add_command(label="✎  Edit",    command=self._edit_device)
+        menu.add_command(label="✎  Edit",    command=lambda: self._edit_device_direct(device))
         menu.add_command(label="📡  Ping",   command=lambda: self._ping_device(device))
         menu.add_separator()
         menu.add_command(label="📋  Copy IP", command=lambda: self._copy_to_clipboard(device["ip"]))
         menu.add_separator()
-        menu.add_command(label="✕  Delete",  command=self._delete_device)
+        menu.add_command(label="✕  Delete",  command=lambda: self._delete_device_by_id(device["id"]))
         menu.tk_popup(event.x_root, event.y_root)
 
     def _copy_to_clipboard(self, text: str):
@@ -399,7 +473,17 @@ class APCToolApp(ctk.CTk):
 
     def _save_new_device(self, data: Dict):
         try:
-            db.add_device(**{k: data[k] for k in ("name", "ip", "card_type", "notes", "location")})
+            db.add_device(
+                name=data["name"],
+                ip=data["ip"],
+                card_type=data.get("card_type", "NMC2"),
+                notes=data.get("notes", ""),
+                location=data.get("location", ""),
+                group_tag=data.get("group_tag", ""),
+                ssh_port=data.get("ssh_port", 22),
+                ftp_port=data.get("ftp_port", 21),
+                key_file=data.get("key_file", ""),
+            )
             self._refresh_device_list()
         except Exception as e:
             messagebox.showerror("Save Error", str(e), parent=self)
@@ -409,19 +493,45 @@ class APCToolApp(ctk.CTk):
             return
         device = db.get_device_by_id(self._selected_device_id)
         if device:
-            DeviceDialog(self, device=device, on_save=lambda d: self._save_edit(d, device["id"]))
+            self._edit_device_direct(device)
+
+    def _edit_device_direct(self, dev: Dict):
+        device = db.get_device_by_id(dev["id"])
+        if not device:
+            return
+        DeviceDialog(
+            self,
+            device=device,
+            on_save=lambda d: self._save_edit(d, device["id"]),
+            on_delete=lambda: self._do_delete(device["id"]),
+        )
 
     def _save_edit(self, data: Dict, device_id: int):
         try:
-            db.update_device(device_id, **{k: data[k] for k in ("name", "ip", "card_type", "notes", "location")})
+            db.update_device(
+                device_id,
+                name=data["name"],
+                ip=data["ip"],
+                card_type=data.get("card_type", "NMC2"),
+                notes=data.get("notes", ""),
+                location=data.get("location", ""),
+                group_tag=data.get("group_tag", ""),
+                ssh_port=data.get("ssh_port", 22),
+                ftp_port=data.get("ftp_port", 21),
+                key_file=data.get("key_file", ""),
+            )
             self._refresh_device_list()
         except Exception as e:
             messagebox.showerror("Save Error", str(e), parent=self)
 
     def _delete_device(self):
+        """Legacy method — kept for compatibility; now triggered from context menu."""
         if not self._selected_device_id:
             return
-        device = db.get_device_by_id(self._selected_device_id)
+        self._delete_device_by_id(self._selected_device_id)
+
+    def _delete_device_by_id(self, device_id: int):
+        device = db.get_device_by_id(device_id)
         if not device:
             return
         ConfirmDialog(
@@ -430,14 +540,13 @@ class APCToolApp(ctk.CTk):
             message=f"Delete  {device['name']}  ({device['ip']})?\nThis cannot be undone.",
             confirm_label="Delete",
             danger=True,
-            on_confirm=lambda: self._do_delete(device["id"]),
+            on_confirm=lambda: self._do_delete(device_id),
         )
 
     def _do_delete(self, device_id: int):
         db.delete_device(device_id)
         self._selected_device_id = None
         self._edit_btn.configure(state="disabled")
-        self._del_btn.configure(state="disabled")
         self._refresh_device_list()
 
     # ── Connection flow ──────────────────────────────────────────────── #
@@ -476,8 +585,11 @@ class APCToolApp(ctk.CTk):
                 parent=self,
             )
             return
-        pseudo_device = {"id": None, "name": ip, "ip": ip, "card_type": "NMC2",
-                         "notes": "", "location": ""}
+        pseudo_device = {
+            "id": None, "name": ip, "ip": ip, "card_type": "NMC2",
+            "notes": "", "location": "", "group_tag": "",
+            "ssh_port": 22, "ftp_port": 21, "key_file": "",
+        }
         ConnectDialog(
             self, device_name=ip, ip=ip,
             prefill_user=user,
@@ -491,10 +603,14 @@ class APCToolApp(ctk.CTk):
         self._current_device = device
         self._current_user = username
 
-        # Reachability check in background
         self._terminal_write(
             f"\n[  Checking reachability of {device['ip']}…  ]\n", tag=_TAG_WARN
         )
+
+        # Start connecting animation
+        self._info_status.configure(text="🟡  Connecting…", text_color="#d29922")
+        self._connecting_anim = True
+        self.after(500, self._animate_connecting)
 
         threading.Thread(
             target=self._connect_thread,
@@ -502,8 +618,20 @@ class APCToolApp(ctk.CTk):
             daemon=True,
         ).start()
 
+    def _animate_connecting(self):
+        if not self._connecting_anim:
+            return
+        curr = self._info_status.cget("text")
+        dots = curr.count(".")
+        base = "🟡  Connecting"
+        new_dots = (dots % 3) + 1
+        self._info_status.configure(text=base + "." * new_dots, text_color="#d29922")
+        self.after(500, self._animate_connecting)
+
     def _connect_thread(self, device: Dict, username: str, password: str):
         ip = device["ip"]
+        ssh_port = int(device.get("ssh_port", 22) or 22)
+        key_file = device.get("key_file", "") or ""
 
         # Ping check
         ping_ok, ssh_ok, ping_ms = net.check_reachability(ip)
@@ -519,9 +647,8 @@ class APCToolApp(ctk.CTk):
                 tag=_TAG_OK,
             ))
 
-        # SSH connect
         self.after(0, lambda: self._terminal_write(
-            f"[  Connecting to {username}@{ip}…  ]\n", tag=_TAG_WARN
+            f"[  Connecting to {username}@{ip}:{ssh_port}…  ]\n", tag=_TAG_WARN
         ))
 
         client = APCSSHClient(
@@ -535,21 +662,45 @@ class APCToolApp(ctk.CTk):
         stored_rec = db.get_host_key(ip)
         stored_fp = stored_rec["fingerprint"] if stored_rec else None
 
-        try:
-            client.connect(ip, username, password, stored_fingerprint=stored_fp)
-        except ConnectionError as e:
-            err_msg = str(e)
+        # Retry loop
+        MAX_RETRIES = 3
+        RETRY_DELAY = 5  # seconds
+        last_err = None
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                client.connect(
+                    ip, username, password,
+                    stored_fingerprint=stored_fp,
+                    port=ssh_port,
+                    key_file=key_file if key_file else None,
+                )
+                last_err = None
+                break
+            except ConnectionError as e:
+                last_err = e
+                if "Authentication failed" in str(e):
+                    break  # don't retry auth failures
+                if attempt < MAX_RETRIES:
+                    self.after(0, lambda a=attempt: self._terminal_write(
+                        f"[  ⚠  Attempt {a} failed. Retrying in {RETRY_DELAY}s…  ]\n",
+                        tag=_TAG_WARN,
+                    ))
+                    time.sleep(RETRY_DELAY)
+
+        if last_err:
+            err_msg = self._friendly_error(str(last_err))
             self.after(0, lambda: self._terminal_write(
                 f"[  ❌  Connection failed: {err_msg}  ]\n", tag=_TAG_ERR
             ))
             db.log_audit(
                 device["name"], ip, username,
-                "SSH Connect Failed", err_msg, result="failure"
+                "SSH Connect Failed", str(last_err), result="failure"
             )
-            # H-5: reset shared state on the main thread, not the background thread
             def _reset():
                 self._current_device = None
                 self._current_user = ""
+                self._connecting_anim = False
                 self._update_status_bar()
             self.after(0, _reset)
             return
@@ -566,6 +717,23 @@ class APCToolApp(ctk.CTk):
         self.after(0, lambda: self._set_connected_state(True))
         self.after(0, lambda ms=ping_ms: self._update_info_bar(ms))
 
+    @staticmethod
+    def _friendly_error(err: str) -> str:
+        e = err.lower()
+        if "authentication failed" in e or ("auth" in e and "failed" in e):
+            return "Authentication failed — check username and password."
+        if "connection refused" in e:
+            return "Connection refused — is SSH enabled on this card?"
+        if "timed out" in e or "timeout" in e:
+            return "Connection timed out — device not responding on SSH port."
+        if "no route" in e or "unreachable" in e:
+            return "Network unreachable — check IP address and network connection."
+        if "host key" in e and "changed" in e:
+            return "Host key has changed — possible security issue. Verify device physically."
+        if "not accepted" in e:
+            return "Host key not accepted — connection aborted."
+        return err
+
     def _detect_card_type(self, client: APCSSHClient, device: Dict, username: str) -> None:
         """
         Called from _connect_thread after successful login.
@@ -575,13 +743,11 @@ class APCToolApp(ctk.CTk):
         import re as _re
 
         # Wait briefly for the login banner to clear before sending a command
-        import time as _time
-        _time.sleep(2.5)
+        time.sleep(2.5)
 
         output = client.send_and_capture("about", timeout=6.0)
 
         # Map Hardware Rev number to card type string
-        # HW02 = NMC gen 1, HW09 = NMC2, HW21 = NMC3 (others mapped by generation)
         _HW_MAP = {
             "02": "NMC (gen 1)",
             "09": "NMC2",
@@ -592,8 +758,6 @@ class APCToolApp(ctk.CTk):
 
         m = _re.search(r"[Hh]ardware\s+[Rr]ev\s*[:\s]+HW(\d+)", output)
         if m:
-            hw_num = m.group(1).lstrip("0") or "0"
-            # Try exact two-digit match first, then fall back to generation hint
             hw_padded = m.group(1).zfill(2)
             if hw_padded in _HW_MAP:
                 detected = _HW_MAP[hw_padded]
@@ -618,7 +782,7 @@ class APCToolApp(ctk.CTk):
                 "Card Type Detected", f"type={detected}", result="success"
             )
             # Refresh sidebar list so the stored type is shown
-            self.after(0, self._load_devices)
+            self.after(0, self._refresh_device_list)
 
         # Refresh info bar to show detected type
         self.after(0, self._update_info_bar)
@@ -647,6 +811,7 @@ class APCToolApp(ctk.CTk):
     # ── Connected/disconnected state ─────────────────────────────────── #
 
     def _set_connected_state(self, connected: bool):
+        self._connecting_anim = False  # stop animation regardless
         state = "normal" if connected else "disabled"
         for btn in self._action_buttons:
             btn.configure(state=state)
@@ -668,8 +833,10 @@ class APCToolApp(ctk.CTk):
             return
         d = self._current_device
         ms = f"{ping_ms:.0f} ms" if ping_ms is not None else "—"
+        notes = d.get("notes", "").strip()
+        note_suffix = f"  │  📝 {notes}" if notes else ""
         self._info_status.configure(
-            text=f"🟢  CONNECTED  │  {d['name']}  │  {d['ip']}  │  {d['card_type']}",
+            text=f"🟢  CONNECTED  │  {d['name']}  │  {d['ip']}  │  {d['card_type']}{note_suffix}",
             text_color="#3fb950",
         )
         self._ping_lbl.configure(text=f"Ping: {ms}", text_color="#3fb950")
@@ -685,11 +852,6 @@ class APCToolApp(ctk.CTk):
 
     def _verify_host_key(self, ip: str, key_type: str, fingerprint: str,
                           stored_fp: Optional[str]) -> bool:
-        """
-        Called from the SSH background thread when a host key must be verified.
-        Schedules a dialog on the main thread and blocks until the user responds.
-        Returns True to accept, False to reject.
-        """
         event = threading.Event()
         result = [False]
 
@@ -709,11 +871,10 @@ class APCToolApp(ctk.CTk):
                 )
 
         self.after(0, _show)
-        event.wait(timeout=120)   # 2-minute timeout; treats as rejection
+        event.wait(timeout=120)
         return result[0]
 
     def _save_host_key(self, ip: str, key_type: str, fingerprint: str) -> None:
-        """Persist an accepted host key fingerprint to the database."""
         db.save_host_key(ip, key_type, fingerprint, accepted_by=self._current_user)
         db.log_audit(
             self._current_device.get("name", ip) if self._current_device else ip,
@@ -721,9 +882,9 @@ class APCToolApp(ctk.CTk):
             "Host Key Accepted",
             f"type={key_type} fp={fingerprint}",
         )
-        self.after(0, self._update_status_bar)  # C-2: schedule on main thread
+        self.after(0, self._update_status_bar)
 
-    # ── Ping device (sidebar context menu) ──────────────────────────── #
+    # ── Ping helpers ─────────────────────────────────────────────────── #
 
     def _ping_device(self, device: Dict):
         self._terminal_write(f"\n[  Pinging {device['ip']}…  ]\n", tag=_TAG_WARN)
@@ -742,6 +903,27 @@ class APCToolApp(ctk.CTk):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _ping_all_devices(self):
+        devices = db.get_all_devices()
+        if not devices:
+            return
+        self._terminal_write(f"\n[  Pinging {len(devices)} devices…  ]\n", tag=_TAG_WARN)
+
+        def _ping_one(dev):
+            ok, ms = net.ping_host(dev["ip"])
+            result = "ok" if ok else "fail"
+            ms_str = f"{ms:.0f}ms" if ms else "< 1ms"
+            self.after(0, lambda d=dev, r=result, m=ms_str: self._on_ping_result(d, r, m))
+
+        for d in devices:
+            threading.Thread(target=_ping_one, args=(d,), daemon=True).start()
+
+    def _on_ping_result(self, device: Dict, result: str, ms_str: str):
+        self._terminal_write(
+            f"[  {'✓' if result == 'ok' else '✕'}  {device['name']:20s}  {device['ip']:16s}  {ms_str}  ]\n",
+            tag=_TAG_OK if result == "ok" else _TAG_ERR,
+        )
+
     # ── Terminal helpers ─────────────────────────────────────────────── #
 
     def _terminal_write(self, text: str, tag: Optional[str] = None):
@@ -751,6 +933,12 @@ class APCToolApp(ctk.CTk):
             self._terminal._textbox.insert("end", text, tag)
         else:
             self._terminal._textbox.insert("end", text)
+
+        # Scrollback limit — keep at most 2000 lines
+        line_count = int(self._terminal._textbox.index("end-1c").split(".")[0])
+        if line_count > 2000:
+            self._terminal._textbox.delete("1.0", f"{line_count - 2000}.0")
+
         self._terminal._textbox.see("end")
         self._terminal.configure(state="disabled")
 
@@ -763,9 +951,27 @@ class APCToolApp(ctk.CTk):
         cmd = self._cmd_var.get().strip()
         if not cmd or not self._ssh:
             return
+        # Track history
+        if not self._cmd_history or self._cmd_history[-1] != cmd:
+            self._cmd_history.append(cmd)
+        self._cmd_history_idx = -1
         self._terminal_write(f"\napc> {cmd}\n", tag=_TAG_CMD)
         self._ssh.send(cmd)
         self._cmd_var.set("")
+
+    def _history_prev(self, _=None):
+        if not self._cmd_history:
+            return
+        self._cmd_history_idx = min(self._cmd_history_idx + 1, len(self._cmd_history) - 1)
+        self._cmd_var.set(self._cmd_history[-(self._cmd_history_idx + 1)])
+
+    def _history_next(self, _=None):
+        if self._cmd_history_idx <= 0:
+            self._cmd_history_idx = -1
+            self._cmd_var.set("")
+            return
+        self._cmd_history_idx -= 1
+        self._cmd_var.set(self._cmd_history[-(self._cmd_history_idx + 1)])
 
     # ── Action handlers ──────────────────────────────────────────────── #
 
@@ -844,7 +1050,6 @@ class APCToolApp(ctk.CTk):
         if pw1 != pw2:
             messagebox.showerror("Mismatch", "Passwords do not match.")
             return
-        # Echo a redacted version to the terminal — never show the actual password
         self._terminal_write(f"\napc> user -n {user} -pw ******\n", tag=_TAG_CMD)
         if self._ssh:
             self._ssh.send(f"user -n {user} -pw {pw1}")
@@ -867,10 +1072,8 @@ class APCToolApp(ctk.CTk):
         )
 
     def _do_reboot(self):
-        """Send reboot command; schedule YES confirmation via after() — no sleep on main thread."""
         self._terminal_write("\napc> reboot\n", tag=_TAG_CMD)
         self._ssh.send("reboot")
-        # Schedule confirmation after 1 s to let the device display its prompt
         self.after(1000, self._send_reboot_confirm)
 
     def _send_reboot_confirm(self):
@@ -894,6 +1097,7 @@ class APCToolApp(ctk.CTk):
             self,
             ip=device["ip"],
             prefill_user=self._current_user,
+            ftp_port=int(device.get("ftp_port", 21) or 21),
             on_complete=lambda files: [
                 db.log_audit(
                     device.get("name", ""),
@@ -946,6 +1150,71 @@ class APCToolApp(ctk.CTk):
         if cmd and cmd.strip():
             self._send_cmd(cmd.strip(), "Manual Command", cmd.strip())
 
+    def _action_config_snapshot(self):
+        if not self._ssh or not self._current_device:
+            return
+        from tkinter import filedialog
+        device_name = self._current_device.get("name", "device").replace(" ", "_")
+        default = f"snapshot_{device_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save Config Snapshot",
+            defaultextension=".txt",
+            initialfile=default,
+            filetypes=[("Text File", "*.txt"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        self._terminal_write(f"\n[  Capturing config snapshot…  ]\n", tag=_TAG_WARN)
+
+        def _run():
+            cmds = ["about", "tcpip", "dns", "system", "ups"]
+            lines = [
+                f"APC NMC Config Snapshot — {self._current_device.get('name')} ({self._current_device.get('ip')})\n",
+                f"Captured: {datetime.datetime.now().isoformat()}\n",
+                "=" * 60 + "\n\n",
+            ]
+            for cmd in cmds:
+                output = self._ssh.send_and_capture(cmd, timeout=6.0)
+                lines.append(f"--- {cmd} ---\n{output}\n\n")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+                self.after(0, lambda: self._terminal_write(
+                    f"[  ✓ Snapshot saved to {path}  ]\n", tag=_TAG_OK
+                ))
+                db.log_audit(
+                    self._current_device.get("name", ""),
+                    self._current_device.get("ip", ""),
+                    self._current_user,
+                    "Config Snapshot",
+                    f"file={path}",
+                )
+                self.after(0, self._update_status_bar)
+            except Exception as e:
+                self.after(0, lambda: self._terminal_write(
+                    f"[  ❌ Snapshot failed: {e}  ]\n", tag=_TAG_ERR
+                ))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _action_macros(self):
+        MacroDialog(self, on_run=self._run_macro)
+
+    def _run_macro(self, commands: List[str]):
+        if not self._ssh:
+            return
+
+        def _run():
+            for cmd in commands:
+                cmd = cmd.strip()
+                if not cmd:
+                    continue
+                self.after(0, lambda c=cmd: self._send_cmd(c, "Macro Command", c))
+                time.sleep(0.5)
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── First-run wizard ─────────────────────────────────────────────── #
 
     def _show_first_run(self):
@@ -970,7 +1239,6 @@ class APCToolApp(ctk.CTk):
 
     def _do_import_database(self, src_path: str):
         dest = db.DB_PATH
-        # NEW-1: use samefile to handle case/symlink differences on Windows
         try:
             same = os.path.exists(dest) and os.path.samefile(src_path, dest)
         except (OSError, ValueError):
@@ -980,11 +1248,25 @@ class APCToolApp(ctk.CTk):
                                 "That is already the active database.", parent=self)
             return
 
-        # NEW-2: verify the selected file is a valid SQLite database
         import sqlite3 as _sqlite3
         try:
             with _sqlite3.connect(src_path, timeout=5) as probe:
                 probe.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+                # Validate required tables
+                tables = {r[0] for r in probe.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()}
+                required = {"devices", "audit_log", "settings"}
+                missing = required - tables
+                if missing:
+                    raise ValueError(f"Missing tables: {', '.join(sorted(missing))}")
+        except ValueError as e:
+            messagebox.showerror(
+                "Incompatible Database",
+                f"The selected database is not compatible:\n{e}",
+                parent=self,
+            )
+            return
         except Exception:
             messagebox.showerror(
                 "Invalid File",
@@ -1006,7 +1288,7 @@ class APCToolApp(ctk.CTk):
                 return
         try:
             shutil.copy2(src_path, dest)
-            db.initialize_db()   # ensure schema is up to date
+            db.initialize_db()
             self._refresh_device_list()
             count = db.get_device_count()
             messagebox.showinfo(
@@ -1025,9 +1307,16 @@ class APCToolApp(ctk.CTk):
     def _open_credential_manager(self):
         CredentialManagerWindow(self)
 
-    # ── Cleanup ──────────────────────────────────────────────────────── #
+    # ── Cleanup ──────────────────────────────────────────────── #
 
     def _on_close(self):
+        if self._ssh and self._ssh.is_connected:
+            if not messagebox.askyesno(
+                "Active Connection",
+                "You are currently connected to a device.\nDisconnect and exit?",
+                parent=self,
+            ):
+                return
         if self._ssh:
             self._ssh.disconnect()
         self.destroy()

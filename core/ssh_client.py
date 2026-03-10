@@ -75,7 +75,8 @@ class APCSSHClient:
 
     def connect(self, ip: str, username: str, password: str,
                 stored_fingerprint: Optional[str] = None,
-                port: int = 22) -> None:
+                port: int = 22,
+                key_file: Optional[str] = None) -> None:
         """
         Open an SSH session to an APC NMC card.
 
@@ -97,7 +98,7 @@ class APCSSHClient:
 
         # Strategy 1 — SSHClient with rsa-sha2 variants disabled (NMC2 / NMC3)
         try:
-            self._connect_via_client(ip, port, username, password, policy)
+            self._connect_via_client(ip, port, username, password, policy, key_file=key_file)
             self._start_reader()
             return
         except _AuthError:
@@ -180,7 +181,7 @@ class APCSSHClient:
 
     # ── Connection Strategies ────────────────────────────────────────── #
 
-    def _connect_via_client(self, ip, port, username, password, policy) -> None:
+    def _connect_via_client(self, ip, port, username, password, policy, key_file=None) -> None:
         """Standard SSHClient approach — works for NMC2 and NMC3."""
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(policy)
@@ -193,6 +194,7 @@ class APCSSHClient:
                 timeout=self.CONNECT_TIMEOUT,
                 look_for_keys=False,
                 allow_agent=False,
+                key_filename=key_file if key_file else None,
                 # Disable rsa-sha2 variants so the card negotiates ssh-rsa
                 disabled_algorithms={"pubkeys": ["rsa-sha2-256", "rsa-sha2-512"]},
             )
