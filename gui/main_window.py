@@ -228,8 +228,17 @@ class APCToolApp(ctk.CTk):
         )
         self._info_status.pack(side="left", padx=16, pady=8)
 
+        self._info_disconnect_btn = ctk.CTkButton(
+            self._info_bar, text="⏏  Disconnect", width=120, height=30, font=_SANS_SM,
+            fg_color="#7a1f1f", hover_color="#a33030",
+            command=self._disconnect,
+        )
+        # packed/forgotten dynamically by _set_connected_state
+        self._info_disconnect_btn.pack(side="right", padx=(4, 12), pady=8)
+        self._info_disconnect_btn.pack_forget()  # hidden until connected
+
         self._ping_lbl = ctk.CTkLabel(self._info_bar, text="", font=_SANS_SM, text_color="gray50")
-        self._ping_lbl.pack(side="right", padx=16)
+        self._ping_lbl.pack(side="right", padx=8)
 
     # ── Action buttons ───────────────────────────────────────────────── #
 
@@ -250,7 +259,7 @@ class APCToolApp(ctk.CTk):
             ("📌  Location",        self._action_location),
             ("👤  Contact",         self._action_contact),
             ("📋  Event Log",       self._action_event_log),
-            ("📊  UPS Status",      self._action_ups_status),
+            ("📊  Device Status",   self._action_ups_status),
             ("🔍  DNS Settings",    self._action_dns),
             ("❓  Help",            self._action_help),
             ("⌨  Manual Command",   self._action_manual),
@@ -818,6 +827,10 @@ class APCToolApp(ctk.CTk):
         self._send_btn.configure(state=state)
         self._cmd_entry.configure(state=state)
         self._disconnect_btn.configure(state=state)
+        if connected:
+            self._info_disconnect_btn.pack(side="right", padx=(4, 12), pady=8)
+        else:
+            self._info_disconnect_btn.pack_forget()
 
         if not connected:
             self._info_status.configure(
